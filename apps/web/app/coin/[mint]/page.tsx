@@ -88,6 +88,7 @@ export default function CoinPage({ params }: { params: Promise<{ mint: string }>
         <table>
           <thead><tr><th>When</th><th>Models served</th><th>Turns</th><th>Cost</th><th>Stop</th><th /></tr></thead>
           <tbody>
+            {d.runs.length === 0 && <tr><td colSpan={6} className="muted">No stretches yet. The solver starts on the next scheduler pass.</td></tr>}
             {d.runs.map((r) => (
               <tr key={r.id}>
                 <td>{ago(r.startedAt)}</td>
@@ -105,6 +106,7 @@ export default function CoinPage({ params }: { params: Promise<{ mint: string }>
       <div className="split" style={{ marginTop: 12 }}>
         <section className="card">
           <h3>Solver notes</h3>
+          {d.notes.length === 0 && <p className="muted">No notes yet.</p>}
           {d.notes.map((n, i) => <p key={i}><span className="muted">{new Date(n.at).toLocaleTimeString()}</span> {n.text}</p>)}
         </section>
         <section className="card">

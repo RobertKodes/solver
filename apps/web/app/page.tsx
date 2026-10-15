@@ -37,7 +37,7 @@ export default function Landing() {
         </div>
       </section>
 
-      <div className="grid">
+      <div className="grid stats">
         <div className="card stat"><b>{coins.length}</b><span className="muted">solvers</span></div>
         <div className="card stat"><b>{usd(raised)}</b><span className="muted">compute raised</span></div>
         <div className="card stat"><b>{usd(spent)}</b><span className="muted">compute spent</span></div>
