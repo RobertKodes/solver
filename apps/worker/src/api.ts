@@ -26,10 +26,20 @@ export interface ApiDeps {
   notes: (mint: string) => Promise<{ text: string; at: Date }[]>;
   solUsd: () => Promise<number>;
   incumbents: Record<string, { timeLog2: number; by: string; ref: string }>;
+  /** Validates (and in demo mode starts) a solver launch. */
+  launch: (body: unknown) => Promise<{ status: number; body: unknown }>;
+  models: string[];
 }
 
+const readBody = (req: import("node:http").IncomingMessage) =>
+  new Promise<unknown>((ok, bad) => {
+    let d = "";
+    req.on("data", (c) => (d += c));
+    req.on("end", () => { try { ok(d ? JSON.parse(d) : {}); } catch (e) { bad(e); } });
+  });
+
 const json = (res: ServerResponse, status: number, body: unknown) => {
-  res.writeHead(status, { "content-type": "application/json", "access-control-allow-origin": "*" });
+  res.writeHead(status, { "content-type": "application/json", "access-control-allow-origin": "*", "access-control-allow-headers": "content-type" });
   res.end(JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
 };
 
@@ -45,6 +55,12 @@ export function startApi(deps: ApiDeps, port: number) {
       const [, resource, id, sub] = parts;
       const solUsd = await deps.solUsd();
 
+      if (req.method === "OPTIONS") return json(res, 204, {});
+      if (resource === "launch" && req.method === "POST") {
+        const r = await deps.launch(await readBody(req));
+        return json(res, r.status, r.body);
+      }
+      if (resource === "catalog") return json(res, 200, { models: deps.models });
       if (resource === "targets") return json(res, 200, { targets: TARGETS.map(({ hash, ...t }) => t), launchable: launchableTargets().map((t) => t.id) });
 
       if (resource === "coins" && !id) {

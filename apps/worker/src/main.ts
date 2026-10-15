@@ -82,7 +82,27 @@ const llm = new LlmClient({
 if (pg) for (const c of coins) await pg.ensureCoin(c);
 if (demo) for (const c of coins) await books.feeClaim({ mint: c.mint, lamports: LAMPORTS_PER_SOL, chainTx: `demo-${c.mint}` });
 
-startApi({ coins: () => coins, live, books, store, notes: notesOf, solUsd, incumbents: { "sha256-r37-prefix-v1": { timeLog2: 60.38, by: "public frontier", ref: "yukon.org/hashsmash" } } }, PORT);
+const MODELS = (env.LAUNCH_MODELS ?? "anthropic/claude-fable-5.1,openai/gpt-6-astra,deepseek/deepseek-v4-pro,qwen/qwen3.8-flash").split(",").concat(demo ? ["demo/model"] : []);
+
+async function launch(body: unknown) {
+  const { validateLaunch } = await import("./launch.js");
+  const r = { description: "", imageCid: "", approach: "", initialBuySol: 0, launcher: "demo", ...(body as Partial<import("./launch.js").LaunchRequest>) } as import("./launch.js").LaunchRequest;
+  const problems = validateLaunch(r, new Set(MODELS));
+  if (problems.length) return { status: 400, body: { ok: false, problems } };
+  if (!demo) {
+    // Live launches are signed in the user's wallet: the web app requests the
+    // unsigned transactions from PumpSdkLauncher.buildLaunchTx (see pump.ts).
+    return { status: 501, body: { ok: false, problems: ["Live launch needs wallet signing; configure SOLANA_RPC_URL and the wallet flow."] } };
+  }
+  const mint = `Demo${r.symbol}${coins.length}`;
+  const coin: Coin = { mint, symbol: r.symbol, targetId: r.targetId, lane: r.lane, modelId: r.modelId === "demo/model" ? r.modelId : "demo/model", approach: r.approach ?? "", treasury: `T-${mint}` };
+  coins.push(coin);
+  if (pg) await pg.ensureCoin(coin);
+  await books.feeClaim({ mint, lamports: LAMPORTS_PER_SOL / 2n, chainTx: `demo-${mint}` });
+  return { status: 201, body: { ok: true, mint, note: "Demo mode: coin simulated and funded with 0.5 SOL of fees; its solver starts on the next pass." } };
+}
+
+startApi({ coins: () => coins, live, books, store, notes: notesOf, solUsd, launch, models: MODELS, incumbents: { "sha256-r37-prefix-v1": { timeLog2: 60.38, by: "public frontier", ref: "yukon.org/hashsmash" } } }, PORT);
 console.log(`[worker] API on :${PORT}${demo ? " (demo mode)" : ""}`);
 
 const { BrowserbaseDriver, E2BRunner } = await import("./drivers.js");
