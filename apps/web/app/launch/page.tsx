@@ -4,12 +4,45 @@ import { API } from "../../lib/api";
 
 interface Target { id: string; primitive: string; rounds: number; status: string }
 
+type Phantom = {
+  isPhantom?: boolean;
+  connect(): Promise<{ publicKey: { toBase58(): string } }>;
+  signAllTransactions<T>(txs: T[]): Promise<T[]>;
+};
+const phantom = () => (typeof window !== "undefined" ? (window as unknown as { solana?: Phantom }).solana : undefined);
+const b64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
 export default function Launch() {
   const [targets, setTargets] = useState<Target[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [form, setForm] = useState({ name: "", symbol: "", targetId: "", lane: "exploratory", modelId: "", approach: "", initialBuySol: 0.1 });
   const [result, setResult] = useState<{ ok: boolean; problems?: string[]; mint?: string; note?: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [wallet, setWallet] = useState<string | null>(null);
+
+  async function connect() {
+    const p = phantom();
+    if (!p) return setResult({ ok: false, problems: ["Install the Phantom wallet extension to launch for real."] });
+    const { publicKey } = await p.connect();
+    setWallet(publicKey.toBase58());
+  }
+
+  /** Live mode: server returns unsigned txs; the mint keypair co-signs tx 1, the wallet signs both. */
+  async function signAndSend(sign: string[], mintKp: import("@solana/web3.js").Keypair) {
+    const { Connection, Transaction } = await import("@solana/web3.js");
+    const txs = sign.map((s) => Transaction.from(b64(s)));
+    txs[0]!.partialSign(mintKp);
+    const signed = await phantom()!.signAllTransactions(txs);
+    const conn = new Connection(process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.mainnet-beta.solana.com", "confirmed");
+    const signatures: string[] = [];
+    for (const tx of signed) {
+      const sig = await conn.sendRawTransaction(tx.serialize());
+      await conn.confirmTransaction(sig, "confirmed");
+      signatures.push(sig);
+    }
+    const r = await fetch(`${API}/v1/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: true, mint: mintKp.publicKey.toBase58(), signatures }) });
+    return r.json();
+  }
 
   useEffect(() => {
     fetch(`${API}/v1/targets`).then((r) => r.json()).then((d) => {
@@ -31,10 +64,14 @@ export default function Launch() {
     setBusy(true);
     setResult(null);
     try {
-      const r = await fetch(`${API}/v1/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(form) });
-      setResult(await r.json());
-    } catch {
-      setResult({ ok: false, problems: ["Could not reach the API."] });
+      const { Keypair } = await import("@solana/web3.js");
+      const mintKp = Keypair.generate();
+      const body = { ...form, ...(wallet ? { launcher: wallet, mint: mintKp.publicKey.toBase58() } : {}) };
+      const r = await fetch(`${API}/v1/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
+      setResult(d.ok && d.sign ? await signAndSend(d.sign, mintKp) : d);
+    } catch (err) {
+      setResult({ ok: false, problems: [err instanceof Error ? err.message : "Could not reach the API."] });
     } finally {
       setBusy(false);
     }
@@ -58,7 +95,11 @@ export default function Launch() {
         </label>
         <label>Research brief (optional)<textarea value={form.approach} onChange={set("approach")} maxLength={800} rows={4} /></label>
         <label>Initial buy (SOL)<input type="number" min={0} max={50} step={0.01} value={form.initialBuySol} onChange={set("initialBuySol")} /></label>
-        <button className="btn" disabled={busy}>{busy ? "Launching…" : "Launch"}</button>
+        <div className="row">
+          <button type="button" className="btn ghost" onClick={connect}>{wallet ? `Wallet ${wallet.slice(0, 4)}…${wallet.slice(-4)}` : "Connect wallet"}</button>
+          <button className="btn" disabled={busy}>{busy ? "Launching…" : "Launch"}</button>
+        </div>
+        <span className="muted">Demo server: no wallet needed. Live server: connect Phantom, then approve the two launch transactions.</span>
       </form>
       {result && (
         <div className={`card ${result.ok ? "" : "warn"}`} style={{ marginTop: 12 }}>

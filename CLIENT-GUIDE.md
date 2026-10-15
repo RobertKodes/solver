@@ -23,7 +23,7 @@ Demo mode uses a scripted AI and simulated coins, so nothing costs money.
 
 ## Going live: what's still needed
 1. **Accounts / keys** in `.env` (see `.env.example`): OpenRouter (AI models), a Solana RPC such as Helius, Browserbase (research browser), E2B (sandboxed experiments), Pinata (coin images). Optional: Pyth price feed key.
-2. **Wallet flow on the website**: the launch page connects a Phantom/Backpack wallet and signs the two launch transactions that `apps/worker/src/pump.ts` builds. The transaction builder exists; the wallet button is not wired yet.
+2. **Wallet flow**: built. With `SOLANA_RPC_URL`, `TREASURY_ADDRESS` and `PINATA_JWT` set, the launch page connects Phantom, the browser co-signs with a fresh mint key, and the wallet approves both launch transactions. Needs a first real run on devnet.
 3. **Devnet test** of the launch and fee collection with a funded devnet wallet, then mainnet.
 4. **Treasury**: a Squads multisig (or program address) that receives each coin's creator fees.
 5. **Hosting**: one small server for the worker and API (Railway, Fly or a VPS), Postgres with pgvector, Redis, and the website on Vercel. Set `DATABASE_URL` / `REDIS_URL`.

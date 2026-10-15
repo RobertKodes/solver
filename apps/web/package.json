@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.98.0",
     "@solver/brand": "workspace:*",
     "next": "15.1.6",
     "react": "19.0.0",

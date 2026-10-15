@@ -84,15 +84,51 @@ if (demo) for (const c of coins) await books.feeClaim({ mint: c.mint, lamports: 
 
 const MODELS = (env.LAUNCH_MODELS ?? "anthropic/claude-fable-5.1,openai/gpt-6-astra,deepseek/deepseek-v4-pro,qwen/qwen3.8-flash").split(",").concat(demo ? ["demo/model"] : []);
 
+const pendingLaunches = new Map<string, { request: import("./launch.js").LaunchRequest; at: number }>();
+
+/** Called by the web app after both launch txs land; the coin goes live once confirmed on-chain. */
+async function confirmLaunch(body: unknown) {
+  const { mint, signatures } = body as { mint?: string; signatures?: string[] };
+  const p = mint ? pendingLaunches.get(mint) : undefined;
+  if (!p || !signatures?.length || !env.SOLANA_RPC_URL || !env.TREASURY_ADDRESS) return { status: 400, body: { ok: false, problems: ["unknown launch"] } };
+  const { Connection } = await import("@solana/web3.js");
+  const conn = new Connection(env.SOLANA_RPC_URL, "confirmed");
+  const st = await conn.getSignatureStatuses(signatures, { searchTransactionHistory: true });
+  if (!st.value.every((s) => s && !s.err && s.confirmationStatus)) return { status: 409, body: { ok: false, problems: ["transactions not confirmed yet"] } };
+  const coin: Coin = { mint: mint!, symbol: p.request.symbol, targetId: p.request.targetId, lane: p.request.lane, modelId: p.request.modelId, approach: p.request.approach, treasury: env.TREASURY_ADDRESS };
+  coins.push(coin);
+  pendingLaunches.delete(mint!);
+  if (pg) await pg.ensureCoin({ ...coin, name: p.request.name, launcher: p.request.launcher });
+  return { status: 201, body: { ok: true, mint } };
+}
+
 async function launch(body: unknown) {
+  if ((body as { confirm?: boolean }).confirm) return confirmLaunch(body);
   const { validateLaunch } = await import("./launch.js");
   const r = { description: "", imageCid: "", approach: "", initialBuySol: 0, launcher: "demo", ...(body as Partial<import("./launch.js").LaunchRequest>) } as import("./launch.js").LaunchRequest;
   const problems = validateLaunch(r, new Set(MODELS));
   if (problems.length) return { status: 400, body: { ok: false, problems } };
   if (!demo) {
-    // Live launches are signed in the user's wallet: the web app requests the
-    // unsigned transactions from PumpSdkLauncher.buildLaunchTx (see pump.ts).
-    return { status: 501, body: { ok: false, problems: ["Live launch needs wallet signing; configure SOLANA_RPC_URL and the wallet flow."] } };
+    // Live: return unsigned txs for the user's wallet (Phantom) to sign. The browser
+    // generates the mint keypair and co-signs tx 1; the server never holds a key.
+    const mint = (body as { mint?: string }).mint;
+    if (!env.SOLANA_RPC_URL || !env.TREASURY_ADDRESS || !env.PINATA_JWT) return { status: 501, body: { ok: false, problems: ["Server needs SOLANA_RPC_URL, TREASURY_ADDRESS and PINATA_JWT for live launches."] } };
+    if (!mint || r.launcher === "demo") return { status: 400, body: { ok: false, problems: ["Connect a wallet first."] } };
+    const { Connection } = await import("@solana/web3.js");
+    const { PumpSdkLauncher } = await import("./pump.js");
+    const launcher = new PumpSdkLauncher(new Connection(env.SOLANA_RPC_URL, "confirmed"), async (q) => {
+      const res = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.PINATA_JWT}`, "content-type": "application/json" },
+        body: JSON.stringify({ pinataContent: { name: q.name, symbol: q.symbol, description: q.description, image: q.imageCid ? `ipfs://${q.imageCid}` : undefined } }),
+      });
+      const j = (await res.json()) as { IpfsHash?: string };
+      if (!j.IpfsHash) throw new Error("metadata upload failed");
+      return `https://ipfs.io/ipfs/${j.IpfsHash}`;
+    });
+    const { txsBase64 } = await launcher.buildLaunchTx(r, mint, env.TREASURY_ADDRESS);
+    pendingLaunches.set(mint, { request: r, at: Date.now() });
+    return { status: 200, body: { ok: true, sign: txsBase64, mint } };
   }
   const mint = `Demo${r.symbol}${coins.length}`;
   const coin: Coin = { mint, symbol: r.symbol, targetId: r.targetId, lane: r.lane, modelId: r.modelId === "demo/model" ? r.modelId : "demo/model", approach: r.approach ?? "", treasury: `T-${mint}` };
